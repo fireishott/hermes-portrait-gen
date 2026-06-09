@@ -1,5 +1,5 @@
 name: portrait-gen
-version: 0.0.1
+version: 0.0.2
 kind: standalone
 description: "Local portrait generation with face preservation. Identifies faces, auto-files reference photos, orchestrates ComfyUI + PuLID + Flux on MBP for generation. Zero base64 — all file-based over SSH."
 author: ignyte

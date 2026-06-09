@@ -26,14 +26,31 @@ def _get_app():
     """Lazy-load InsightFace. Requires insightface + onnxruntime."""
     global _app
     if _app is None:
+        import sys
+        import logging
+        _log = logging.getLogger("portrait-gen")
         try:
             from insightface.app import FaceAnalysis
-        except ImportError:
-            raise ImportError(
-                "insightface not installed. Run: "
-                "~/.hermes/hermes-agent/venv/bin/pip3 install insightface onnxruntime"
-            )
-        models_dir = str(INSIGHTFACE_DIR / "models")
+        except (ImportError, ModuleNotFoundError) as e:
+            _log.error(f"InsightFace import failed: {e}")
+            _log.error(f"sys.path = {sys.path}")
+            _log.error(f"onnxruntime in sys.modules: {'onnxruntime' in sys.modules}")
+            if 'onnxruntime' in sys.modules:
+                ort = sys.modules['onnxruntime']
+                _log.error(f"onnxruntime file: {getattr(ort, '__file__', 'N/A')}")
+            # Try force-reimport
+            for mod_key in list(sys.modules.keys()):
+                if 'onnxruntime' in mod_key:
+                    del sys.modules[mod_key]
+            try:
+                from insightface.app import FaceAnalysis
+                _log.info("InsightFace loaded after cache flush")
+            except Exception as e2:
+                raise ImportError(
+                    f"insightface not installed after cache flush. Error: {e2}. "
+                    f"Original: {e}. sys.path has {len(sys.path)} entries."
+                )
+        models_dir = str(INSIGHTFACE_DIR.parent)
         provider = "CPUExecutionProvider"
         try:
             import onnxruntime
