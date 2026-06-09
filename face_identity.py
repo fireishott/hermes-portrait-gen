@@ -1,14 +1,18 @@
-"""Face identity — detect, embed, identify, auto-file reference photos."""
+"""Face identity — detect, embed, identify, auto-file reference photos.
+
+Delegates InsightFace analysis to a subprocess (face_analyzer.py) so
+onnxruntime/insightface never pollute the agent's Python process.
+All heavy lifting happens in a clean venv Python every time.
+"""
 
 from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
-
-import numpy as np
 
 from .config import (
     REF_PHOTOS_DIR,
@@ -18,61 +22,34 @@ from .config import (
 )
 from .models import FaceIdentity, FaceMatch, EmbeddingsDB
 
-# Lazy-loaded InsightFace app
-_app = None
+# Path to the standalone face analyzer script
+_ANALYZER_SCRIPT = Path(__file__).parent / "scripts" / "face_analyzer.py"
+_VENV_PYTHON = Path.home() / ".hermes/hermes-agent/venv/bin/python3"
 
 
-def _get_app():
-    """Lazy-load InsightFace. Requires insightface + onnxruntime."""
-    global _app
-    if _app is None:
-        import sys
-        import logging
-        _log = logging.getLogger("portrait-gen")
+def _run_analyzer(*args: str, timeout: int = 120) -> dict:
+    """Run face_analyzer.py as a subprocess and return parsed JSON output."""
+    cmd = [str(_VENV_PYTHON), str(_ANALYZER_SCRIPT)] + list(args)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        # Try to parse error from stdout (script writes JSON errors there)
         try:
-            from insightface.app import FaceAnalysis
-        except (ImportError, ModuleNotFoundError) as e:
-            _log.error(f"InsightFace import failed: {e}")
-            _log.error(f"sys.path = {sys.path}")
-            _log.error(f"onnxruntime in sys.modules: {'onnxruntime' in sys.modules}")
-            if 'onnxruntime' in sys.modules:
-                ort = sys.modules['onnxruntime']
-                _log.error(f"onnxruntime file: {getattr(ort, '__file__', 'N/A')}")
-            # Try force-reimport
-            for mod_key in list(sys.modules.keys()):
-                if 'onnxruntime' in mod_key:
-                    del sys.modules[mod_key]
-            try:
-                from insightface.app import FaceAnalysis
-                _log.info("InsightFace loaded after cache flush")
-            except Exception as e2:
-                raise ImportError(
-                    f"insightface not installed after cache flush. Error: {e2}. "
-                    f"Original: {e}. sys.path has {len(sys.path)} entries."
-                )
-        models_dir = str(INSIGHTFACE_DIR.parent)
-        provider = "CPUExecutionProvider"
-        try:
-            import onnxruntime
-            avail = onnxruntime.get_available_providers()
-            if "CoreMLExecutionProvider" in avail:
-                provider = "CoreMLExecutionProvider"
-            elif "CUDAExecutionProvider" in avail:
-                provider = "CUDAExecutionProvider"
-        except ImportError:
-            pass
-        _app = FaceAnalysis(
-            name="antelopev2",
-            root=models_dir,
-            providers=[provider],
-        )
-        _app.prepare(ctx_id=0, det_size=(640, 640))
-    return _app
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity between two embedding vectors."""
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+            err = json.loads(result.stdout)
+            raise RuntimeError(err.get("error", result.stderr.strip()))
+        except (json.JSONDecodeError, ValueError):
+            raise RuntimeError(
+                f"face_analyzer failed (exit {result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"face_analyzer returned non-JSON: {result.stdout[:500]}")
 
 
 def analyze_faces(image_path: str) -> list[dict]:
@@ -80,58 +57,31 @@ def analyze_faces(image_path: str) -> list[dict]:
 
     Returns list of dicts: {embedding, bbox, det_score, age, gender}
     """
-    app = _get_app()
-    import cv2
-    img = cv2.imread(image_path)
-    if img is None:
-        raise FileNotFoundError(f"Cannot read image: {image_path}")
-    faces = app.get(img)
-    results = []
-    for face in faces:
-        results.append({
-            "embedding": face.embedding.tolist(),
-            "bbox": face.bbox.tolist(),
-            "det_score": float(face.det_score),
-            "age": int(face.age) if hasattr(face, "age") else None,
-            "gender": face.gender if hasattr(face, "gender") else None,
-        })
-    return results
+    data = _run_analyzer("analyze", image_path)
+    return data.get("faces", [])
 
 
 def identify_face(image_path: str, db: Optional[EmbeddingsDB] = None) -> list[FaceMatch]:
     """Identify faces in an image against known identities.
 
     Returns list of FaceMatch (one per detected face).
+    Uses subprocess for face detection + matching against the embeddings DB.
     """
-    if db is None:
-        db = EmbeddingsDB(EMBEDDINGS_DB)
-    faces = analyze_faces(image_path)
+    # Use subprocess for the full identify flow (detection + matching)
+    data = _run_analyzer(
+        "identify", image_path,
+        "--db", str(EMBEDDINGS_DB),
+        "--threshold", str(FACE_MATCH_THRESHOLD),
+    )
+
     matches = []
-    known = db.all()
-    for face_data in faces:
-        emb = np.array(face_data["embedding"])
-        best_match = None
-        best_score = 0.0
-        for name, identity in known.items():
-            known_emb = np.array(identity.embedding)
-            score = _cosine_similarity(emb, known_emb)
-            if score > best_score:
-                best_score = score
-                best_match = name
-        if best_match and best_score >= FACE_MATCH_THRESHOLD:
-            matches.append(FaceMatch(
-                person=best_match,
-                confidence=best_score,
-                is_new=False,
-                bbox=face_data["bbox"],
-            ))
-        else:
-            matches.append(FaceMatch(
-                person=None,
-                confidence=best_score,
-                is_new=True,
-                bbox=face_data["bbox"],
-            ))
+    for m in data.get("matches", []):
+        matches.append(FaceMatch(
+            person=m.get("person"),
+            confidence=m.get("confidence", 0.0),
+            is_new=m.get("is_new", True),
+            bbox=m.get("bbox", []),
+        ))
     return matches
 
 
@@ -144,23 +94,24 @@ def register_identity(
 
     Auto-files the photo into the ref library.
     """
-    if db is None:
-        db = EmbeddingsDB(EMBEDDINGS_DB)
-    faces = analyze_faces(image_path)
-    if not faces:
-        raise ValueError(f"No faces detected in {image_path}")
-    # Use highest-confidence face
-    best = max(faces, key=lambda f: f["det_score"])
-    identity = FaceIdentity(
-        name=name.lower().strip(),
-        embedding=best["embedding"],
-        ref_count=1,
+    # Register via subprocess (handles detection + DB write)
+    data = _run_analyzer(
+        "register", name, image_path,
+        "--db", str(EMBEDDINGS_DB),
     )
-    db.put(identity)
+
+    if "error" in data:
+        raise ValueError(data["error"])
+
     # Auto-file the ref photo
     filed_path = file_ref_photo(name, image_path)
+
+    identity = FaceIdentity(
+        name=name.lower().strip(),
+        embedding=[],  # stored in DB by subprocess
+        ref_count=1,
+    )
     identity.best_ref = str(filed_path)
-    db.put(identity)
     return identity
 
 
