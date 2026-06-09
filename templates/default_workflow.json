@@ -1,0 +1,113 @@
+{
+  "1": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "flux1-dev-Q6_K.gguf"
+    }
+  },
+  "2": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
+      "type": "flux"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "REPLACE_WITH_REF_IMAGE"
+    }
+  },
+  "5": {
+    "class_type": "PulidFluxModelLoader",
+    "inputs": {
+      "pulid_file": "pulid_flux_v0.9.0.safetensors"
+    }
+  },
+  "6": {
+    "class_type": "PulidFluxInsightFaceLoader",
+    "inputs": {
+      "provider": "CPU"
+    }
+  },
+  "7": {
+    "class_type": "PulidFluxEvaClipLoader",
+    "inputs": {}
+  },
+  "8": {
+    "class_type": "ApplyPulidFlux",
+    "inputs": {
+      "model": ["1", 0],
+      "pulid_flux": ["5", 0],
+      "eva_clip": ["7", 0],
+      "face_analysis": ["6", 0],
+      "image": ["4", 0],
+      "weight": 0.8,
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "fusion": "mean",
+      "fusion_weight_max": 1.0,
+      "fusion_weight_min": 0.0,
+      "train_step": 1000,
+      "use_gray": true
+    }
+  },
+  "9": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "REPLACE_WITH_PROMPT",
+      "clip": ["2", 0]
+    }
+  },
+  "99": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": ["2", 0]
+    }
+  },
+  "10": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "11": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["8", 0],
+      "positive": ["9", 0],
+      "negative": ["99", 0],
+      "latent_image": ["10", 0],
+      "seed": 42,
+      "steps": 20,
+      "cfg": 3.5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["11", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "13": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["12", 0],
+      "filename_prefix": "portrait"
+    }
+  }
+}

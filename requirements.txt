@@ -1,0 +1,8 @@
+# portrait-gen dependencies
+# Install in Hermes venv:
+#   ~/.hermes/hermes-agent/venv/bin/pip3 install -r requirements.txt
+
+insightface>=0.7.3
+onnxruntime>=1.17.0
+opencv-python-headless>=4.9.0
+numpy>=1.26.0
