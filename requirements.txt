@@ -3,6 +3,6 @@
 #   ~/.hermes/hermes-agent/venv/bin/pip3 install -r requirements.txt
 
 insightface>=0.7.3
-onnxruntime>=1.17.0
+onnxruntime==1.21.0  # pinned: 1.23.x universal wheel fails on Python 3.11 ABI
 opencv-python-headless>=4.9.0
 numpy>=1.26.0

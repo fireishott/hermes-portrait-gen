@@ -28,6 +28,12 @@ iMac (Hermes + Plugin)              MBP (ComfyUI + GPU)
   │ 7. deliver portrait                   │
 ```
 
+### Face Analysis — Subprocess Isolation
+
+All face detection, embedding, and identification runs in a **standalone subprocess** (`scripts/face_analyzer.py`) that spawns a clean Python 3.11 interpreter per call. InsightFace and onnxruntime are **never imported** in the Hermes gateway process. This avoids `sys.modules` cache corruption from stale Python environments and keeps the gateway process lightweight.
+
+The plugin's `face_identity.py` is a thin wrapper: it shells out to `face_analyzer.py` via `_run_analyzer()`, parses JSON output, and handles file operations (ref photo filing, embeddings DB reads).
+
 ## Requirements
 
 ### iMac (Hermes host)
@@ -86,7 +92,11 @@ All settings have sane defaults. Override via environment variables:
 
 ## Version History
 
-- **v0.0.1** — Initial pre-release. Face identification, auto-filing, basic ComfyUI orchestration with PuLID + Flux.
+See [CHANGELOG.md](CHANGELOG.md) for full details.
+
+- **v0.0.3** — Subprocess isolation for all face analysis. Eliminates onnxruntime module cache corruption.
+- **v0.0.2** — Fix model path triple-nesting, pin onnxruntime 1.21.0.
+- **v0.0.1** — Initial pre-release. Face identification, auto-filing, ComfyUI orchestration with PuLID + Flux.
 
 ## License
 
